@@ -1,0 +1,23 @@
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.env
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Local logs
+*.log
