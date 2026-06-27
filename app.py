@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -451,13 +451,13 @@ class OptiFileApp:
         elif preset == "Low":
             gs_resol = "72"
             gs_qfactor = "1.1"
-            img_max_dim = 720
-            img_quality = 40
+            img_max_dim = 800
+            img_quality = 55
         else:  # Balanced (Recommended)
             gs_resol = "150"
             gs_qfactor = "0.7"
-            img_max_dim = 1024
-            img_quality = 70
+            img_max_dim = 1280
+            img_quality = 78
             
         results = []
         skipped_optimized = 0
@@ -520,24 +520,18 @@ class OptiFileApp:
                             for page in writer.pages:
                                 for img_obj in page.images:
                                     try:
-                                        orig_data = img_obj.data
-                                        orig_len = len(orig_data)
+                                        # Pre-check dimensions without decoding to save CPU & memory
+                                        obj = img_obj.indirect_reference.get_object()
+                                        w = obj.get("/Width", 0)
+                                        h = obj.get("/Height", 0)
                                         
-                                        pil_img = img_obj.image
-                                        w, h = pil_img.size
-                                        
-                                        # Only resize if image is large enough
                                         if w > img_max_dim or h > img_max_dim:
+                                            pil_img = img_obj.image
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
-                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                                        
-                                        # Test compressed size
-                                        img_byte_arr = io.BytesIO()
-                                        pil_img.save(img_byte_arr, format='JPEG', quality=img_quality)
-                                        new_data = img_byte_arr.getvalue()
-                                        
-                                        if len(new_data) < orig_len:
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                            
+                                            # Replace directly without duplicate pre-compression checks
                                             img_obj.replace(pil_img, quality=img_quality)
                                             img_compressed = True
                                     except Exception:
@@ -1675,13 +1669,13 @@ class OptiFileApp:
             elif preset == "Low":
                 gs_resol = "72"
                 gs_qfactor = "1.1"
-                img_max_dim = 720
-                img_quality = 40
+                img_max_dim = 800
+                img_quality = 55
             else: # Balanced
                 gs_resol = "150"
                 gs_qfactor = "0.7"
-                img_max_dim = 1024
-                img_quality = 70
+                img_max_dim = 1280
+                img_quality = 78
                 
             for idx, file_info in enumerate(self.selected_files):
                 self.update_progress(idx, total, f"Compressing {file_info['name']}...")
@@ -1758,7 +1752,7 @@ class OptiFileApp:
                                             pil_img = img_obj.image
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
-                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
                                             
                                             # Replace directly without duplicate pre-compression checks
                                             img_obj.replace(pil_img, quality=img_quality)
