@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -774,7 +774,9 @@ class OptiFileApp:
                     
         subprocess.run(["osascript", "-e", f'display notification "Successfully renamed {len(new_paths)} files sequentially." with title "OptiFile"'])
         if new_paths:
-            self.open_path_in_file_manager(os.path.dirname(new_paths[0]))
+            dir_to_open = os.path.dirname(new_paths[0])
+            self.refresh_macos_finder(dir_to_open)
+            self.open_path_in_file_manager(dir_to_open)
             
         self.root.destroy()
 
@@ -2016,6 +2018,14 @@ class OptiFileApp:
             folder = os.path.dirname(self.selected_files[0]["path"])
             self.open_path_in_file_manager(folder)
 
+    def refresh_macos_finder(self, path):
+        if sys.platform == "darwin":
+            try:
+                script = f'tell application "Finder" to update folder (POSIX file "{path}")'
+                subprocess.run(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
     def open_path_in_file_manager(self, path):
         try:
             if sys.platform == "darwin":
@@ -2049,6 +2059,8 @@ class OptiFileApp:
             except Exception as e:
                 print(f"Error replacing original file: {e}")
                 
+        if results:
+            self.refresh_macos_finder(os.path.dirname(results[0]["original"]))
         self.close_results_panel()
 
     def keep_copies(self, results):
@@ -2075,7 +2087,9 @@ class OptiFileApp:
         # Open parent folder of first copy
         if results:
             orig = results[0]["original"]
-            self.open_path_in_file_manager(os.path.dirname(orig))
+            dir_to_open = os.path.dirname(orig)
+            self.refresh_macos_finder(dir_to_open)
+            self.open_path_in_file_manager(dir_to_open)
             
         self.close_results_panel()
 
