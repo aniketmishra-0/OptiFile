@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.7"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -492,7 +492,7 @@ class OptiFileApp:
                     if self.gs_bin and not is_image_heavy:
                         cmd = [
                             self.gs_bin, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
-                            "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                            "-dNOPAUSE", "-dQUIET", "-dBATCH", "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                             "-dDownsampleColorImages=true", f"-dColorImageResolution={gs_resol}",
                             "-dColorImageDownsampleThreshold=1.0", "-dColorImageDownsampleType=/Bicubic",
                             "-dAutoFilterColorImages=false", "-dColorImageFilter=/DCTEncode",
@@ -527,6 +527,12 @@ class OptiFileApp:
                                         
                                         if w > img_max_dim or h > img_max_dim:
                                             pil_img = img_obj.image
+                                            # Convert RGBA/LA transparency to RGB to prevent JPEG compression crash
+                                            if pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info):
+                                                background = Image.new("RGB", pil_img.size, (255, 255, 255))
+                                                background.paste(pil_img, mask=pil_img.convert("RGBA").split()[3])
+                                                pil_img = background
+                                                
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
                                             pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -641,13 +647,16 @@ class OptiFileApp:
                 device = "png16m" if format_ext == "png" else "jpeg"
                 cmd = [
                     self.gs_bin, f"-sDEVICE={device}", "-r150", "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                    "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                     f"-sOutputFile={out_dir}/(%d).{format_ext}", path
                 ]
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
         subprocess.run(["osascript", "-e", 'display notification "Successfully converted PDF pages to images!" with title "OptiFile"'])
         if out_dirs:
-            self.open_path_in_file_manager(os.path.dirname(out_dirs[0]))
+            parent_dir = os.path.dirname(out_dirs[0])
+            self.refresh_macos_finder(parent_dir)
+            self.open_path_in_file_manager(parent_dir)
             
         self.root.destroy()
 
@@ -685,6 +694,7 @@ class OptiFileApp:
                 if self.gs_bin:
                     cmd = [
                         self.gs_bin, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4", "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                        "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                         f"-dDEVICEWIDTHPOINTS={width}", f"-dDEVICEHEIGHTPOINTS={height}", "-dFIXEDMEDIA", "-dPDFFitPage",
                         f"-sOutputFile={temp_out}", path
                     ]
@@ -724,7 +734,9 @@ class OptiFileApp:
                 except Exception:
                     pass
             if results:
-                self.open_path_in_file_manager(os.path.dirname(results[0]["original"]))
+                dir_to_refresh = os.path.dirname(results[0]["original"])
+                self.refresh_macos_finder(dir_to_refresh)
+                self.open_path_in_file_manager(dir_to_refresh)
         else:
             self.discard_temps(results)
             
@@ -1566,6 +1578,7 @@ class OptiFileApp:
                     f"-sDEVICE={device}",
                     "-r150",
                     "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                    "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                     f"-sOutputFile={output_pattern}",
                     pdf_path
                 ]
@@ -1581,6 +1594,10 @@ class OptiFileApp:
         self.reset_ui_after_task()
         self.play_sound()
         
+        if out_dirs:
+            parent_dir = os.path.dirname(out_dirs[0])
+            self.refresh_macos_finder(parent_dir)
+            
         self.show_completion_panel(mode="convert", folders=out_dirs)
 
     # --- ACTION 3: MAKE PAGE SIZES UNIFORM (PREFLIGHT) ---
@@ -1631,6 +1648,7 @@ class OptiFileApp:
                     "-sDEVICE=pdfwrite",
                     "-dCompatibilityLevel=1.4",
                     "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                    "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                     f"-dDEVICEWIDTHPOINTS={width}",
                     f"-dDEVICEHEIGHTPOINTS={height}",
                     "-dFIXEDMEDIA",
@@ -1663,6 +1681,10 @@ class OptiFileApp:
             return
             
         self.play_sound()
+        if results:
+            dir_to_refresh = os.path.dirname(results[0]["temp_out"])
+            self.refresh_macos_finder(dir_to_refresh)
+            
         self.show_completion_panel(mode="preflight", results=results)
 
     # --- ACTION 4: COMPRESSION ---
@@ -1729,6 +1751,7 @@ class OptiFileApp:
                         "-sDEVICE=pdfwrite",
                         "-dCompatibilityLevel=1.4",
                         "-dNOPAUSE", "-dQUIET", "-dBATCH",
+                        "-dNumRenderingThreads=4", "-dBufferSpace=50000000",
                         "-dDownsampleColorImages=true",
                         f"-dColorImageResolution={gs_resol}",
                         "-dColorImageDownsampleThreshold=1.0",
@@ -1768,6 +1791,12 @@ class OptiFileApp:
                                         
                                         if w > img_max_dim or h > img_max_dim:
                                             pil_img = img_obj.image
+                                            # Convert RGBA/LA transparency to RGB to prevent JPEG compression crash
+                                            if pil_img.mode in ('RGBA', 'LA') or (pil_img.mode == 'P' and 'transparency' in pil_img.info):
+                                                background = Image.new("RGB", pil_img.size, (255, 255, 255))
+                                                background.paste(pil_img, mask=pil_img.convert("RGBA").split()[3])
+                                                pil_img = background
+                                                
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
                                             pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
