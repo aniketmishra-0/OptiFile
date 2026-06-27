@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -344,10 +344,26 @@ class OptiFileApp:
 
     def run_applescript_dialog(self, text, title="OptiFile", buttons=["OK"], default_button="OK", icon="note"):
         buttons_str = ", ".join(f'"{b}"' for b in buttons)
+        
+        # Try to dynamically resolve custom icon from bundled app resources
+        icon_str = icon
+        if getattr(sys, 'frozen', False):
+            try:
+                # sys.executable is at /Applications/OptiFile.app/Contents/MacOS/OptiFile
+                contents_dir = os.path.dirname(os.path.dirname(sys.executable))
+                resources_dir = os.path.join(contents_dir, "Resources")
+                if os.path.exists(resources_dir):
+                    for f in os.listdir(resources_dir):
+                        if f.endswith(".icns"):
+                            icon_str = f'file (POSIX file "{os.path.join(resources_dir, f)}")'
+                            break
+            except Exception:
+                pass
+                
         script = f'''
         tell application "System Events"
             activate
-            display dialog "{text}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon}
+            display dialog "{text}" with title "{title}" buttons {{{buttons_str}}} default button "{default_button}" with icon {icon_str}
         end tell
         '''
         try:
@@ -1731,24 +1747,18 @@ class OptiFileApp:
                             for page in writer.pages:
                                 for img_obj in page.images:
                                     try:
-                                        orig_data = img_obj.data
-                                        orig_len = len(orig_data)
+                                        # Pre-check dimensions without decoding to save CPU & memory
+                                        obj = img_obj.indirect_reference.get_object()
+                                        w = obj.get("/Width", 0)
+                                        h = obj.get("/Height", 0)
                                         
-                                        pil_img = img_obj.image
-                                        w, h = pil_img.size
-                                        
-                                        # Only resize if image is large enough
                                         if w > img_max_dim or h > img_max_dim:
+                                            pil_img = img_obj.image
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
                                             pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                                        
-                                        # Test compressed size
-                                        img_byte_arr = io.BytesIO()
-                                        pil_img.save(img_byte_arr, format='JPEG', quality=img_quality)
-                                        new_data = img_byte_arr.getvalue()
-                                        
-                                        if len(new_data) < orig_len:
+                                            
+                                            # Replace directly without duplicate pre-compression checks
                                             img_obj.replace(pil_img, quality=img_quality)
                                             img_compressed = True
                                     except Exception:

@@ -31,7 +31,7 @@ fi
 echo "Using PyInstaller at: $PYI_BIN"
 
 # Run PyInstaller
-"$PYI_BIN" --noconfirm --onedir --windowed --name="OptiFile" --clean app.py
+"$PYI_BIN" --noconfirm --onedir --windowed --name="OptiFile" --icon="logo.icns" --clean app.py
 
 # 3. Verify output
 if [ -d "dist/OptiFile.app" ] || [ -f "dist/OptiFile" ]; then
