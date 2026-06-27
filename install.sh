@@ -9,6 +9,11 @@ TARGET_WORKFLOW_DIR="$SERVICES_DIR/$WORKFLOW_NAME"
 
 echo "Installing OptiFile macOS Finder Integration (Smart GUI Edition)..."
 
+# Stop any running instances
+echo "Stopping any running instances of OptiFile..."
+killall OptiFile 2>/dev/null || true
+pkill -f "OptiFile" 2>/dev/null || true
+
 # 1. Verify and Install OptiFile.app to /Applications
 if [ -d "$SCRIPT_DIR/dist/OptiFile.app" ]; then
     echo "✓ Found compiled OptiFile.app. Installing to /Applications..."

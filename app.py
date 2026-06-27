@@ -7,6 +7,8 @@ import threading
 import uuid
 import time
 from collections import Counter
+import tempfile
+import io
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -69,72 +71,63 @@ class ScrollableFrame(tk.Frame):
         else:
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
+# App Version
+APP_VERSION = "2.0.0"
+
 class OptiFileApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("OptiFile Desktop")
+        self.root.title(f"OptiFile Desktop v{APP_VERSION}")
         self.quality_var = tk.StringVar(value="Balanced")
         
         # Register macOS OpenDocument handler ASAP
         if sys.platform == "darwin":
             self.root.createcommand("::tk::mac::OpenDocument", self.handle_mac_open_document)
             
-        # Filter out macOS process serial number argument if present
-        args = [arg for arg in sys.argv[1:] if not arg.startswith("-psn")]
-        self.files_passed = len(args) > 0
-        self.selected_files = []  # List of dicts: {"path": path, "size": size, "type": "pdf"/"image", "name": name}
+        # Initialize files pending queue and debouncing timer
+        self.pending_files = []
+        self.process_files_timer = None
+        self.native_flow_active = False
+        self.files_passed = False
+        self.selected_files = []
         self.gs_bin = self.find_ghostscript()
         
-        if self.files_passed:
-            for path in args:
-                if os.path.exists(path):
-                    name = os.path.basename(path)
-                    size = os.path.getsize(path)
-                    ext = os.path.splitext(name)[1].lower()
-                    self.selected_files.append({
-                        "path": path,
-                        "name": name,
-                        "size": size,
-                        "type": "pdf" if ext == ".pdf" else "image"
-                    })
-                    
+        # Filter out macOS process serial number argument if present
+        args = [arg for arg in sys.argv[1:] if not arg.startswith("-psn")]
+        if args:
+            self.add_files_to_queue(args)
+            
         # We withdraw the window initially on macOS to avoid flash of wrong mode
         self.init_shown = False
         if sys.platform == "darwin":
             self.root.withdraw()
-            if not self.files_passed:
-                # Wait 150ms to see if OpenDocument Apple Event arrives
+            # If no files passed in argv, set a default timer just in case no Apple Event arrives
+            if not args:
                 self.show_timer = self.root.after(150, self.show_initial_window)
+        else:
+            if args:
+                self.process_queued_files()
             else:
                 self.show_initial_window()
-        else:
-            self.show_initial_window()
             
-    def handle_mac_open_document(self, *args):
-        # Schedule the processing of the opened files to run in the main event loop
-        # so this event handler returns immediately, preventing AppleEvent deadlocks/hangs.
-        try:
-            pass
-        except Exception:
-            pass
-            
-        files = []
-        for arg in args:
-            if isinstance(arg, (list, tuple)):
-                files.extend(arg)
-            else:
-                files.append(arg)
-        self.root.after(10, lambda: self.process_mac_opened_files(files))
+    def add_files_to_queue(self, files):
+        for f in files:
+            if f not in self.pending_files:
+                self.pending_files.append(f)
         
-    def process_mac_opened_files(self, files):
-        try:
-            pass
-        except Exception:
-            pass
+        # Reset the debounce timer (120ms of inactivity required to process)
+        if self.process_files_timer:
+            self.root.after_cancel(self.process_files_timer)
+        self.process_files_timer = self.root.after(120, self.process_queued_files)
+        
+    def process_queued_files(self):
+        self.process_files_timer = None
+        if not self.pending_files:
+            return
             
         self.files_passed = True
         self.selected_files = []
-        for path in files:
+        for path in self.pending_files:
             if os.path.exists(path):
                 name = os.path.basename(path)
                 size = os.path.getsize(path)
@@ -145,18 +138,28 @@ class OptiFileApp:
                     "size": size,
                     "type": "pdf" if ext == ".pdf" else "image"
                 })
+        self.pending_files = [] # Clear the queue
         
-        try:
-            pass
-        except Exception:
-            pass
-            
         if self.init_shown:
-            self.root.geometry("340x480")
-            self.center_window(340, 480)
-            self.rebuild_ui()
+            # If we are already running the native headless flow, rerun it to process new files
+            if self.native_flow_active or sys.platform == "darwin":
+                self.root.after(10, self.run_macos_native_flow)
+            else:
+                self.root.geometry("340x480")
+                self.center_window(340, 480)
+                self.rebuild_ui()
         else:
             self.show_initial_window()
+            
+    def handle_mac_open_document(self, *args):
+        # Gather all opened files
+        files = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                files.extend(arg)
+            else:
+                files.append(arg)
+        self.add_files_to_queue(files)
             
     def show_initial_window(self):
         if self.init_shown:
@@ -357,6 +360,7 @@ class OptiFileApp:
             return None
 
     def run_macos_native_flow(self):
+        self.native_flow_active = True
         if not self.selected_files:
             self.root.destroy()
             return
@@ -427,32 +431,36 @@ class OptiFileApp:
             gs_resol = "300"
             gs_qfactor = "0.3"
             img_max_dim = 1920
-            img_quality = 85
+            img_quality = 88
         elif preset == "Low":
             gs_resol = "72"
             gs_qfactor = "1.1"
             img_max_dim = 800
-            img_quality = 50
-        else:
+            img_quality = 45
+        else:  # Balanced (Recommended)
             gs_resol = "150"
             gs_qfactor = "0.7"
             img_max_dim = 1280
-            img_quality = 70
+            img_quality = 78
             
         results = []
+        skipped_optimized = 0
+        failed_count = 0
+        
         for file_info in self.selected_files:
             try:
                 path = file_info["path"]
                 name = file_info["name"]
                 orig_size = file_info["size"]
                 ext = os.path.splitext(name)[1].lower()
-                
-                dir_name = os.path.dirname(path)
                 base = os.path.splitext(name)[0]
-                temp_out = os.path.join(dir_name, f"{base}_temp_compressed{ext}")
+                
+                temp_out = os.path.join(tempfile.gettempdir(), f"{base}_temp_compressed{ext}")
                 
                 success = False
                 if file_info["type"] == "pdf":
+                    # Method 1: Try Ghostscript
+                    gs_worked = False
                     if self.gs_bin:
                         cmd = [
                             self.gs_bin, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
@@ -465,7 +473,59 @@ class OptiFileApp:
                             "-f", path
                         ]
                         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        success = os.path.exists(temp_out) and os.path.getsize(temp_out) > 0
+                        if os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+                            if os.path.getsize(temp_out) < orig_size:
+                                gs_worked = True
+                                success = True
+                            else:
+                                os.remove(temp_out)
+                                
+                    # Method 2: If Ghostscript failed or bloated, try pypdf+Pillow image resizing
+                    if not gs_worked and pypdf is not None:
+                        try:
+                            reader = pypdf.PdfReader(path)
+                            writer = pypdf.PdfWriter()
+                            for page in reader.pages:
+                                writer.add_page(page)
+                            
+                            img_compressed = False
+                            for page in writer.pages:
+                                for img_obj in page.images:
+                                    try:
+                                        orig_data = img_obj.data
+                                        orig_len = len(orig_data)
+                                        
+                                        pil_img = img_obj.image
+                                        w, h = pil_img.size
+                                        
+                                        # Only resize if image is large enough
+                                        if w > img_max_dim or h > img_max_dim:
+                                            ratio = min(img_max_dim / w, img_max_dim / h)
+                                            new_w, new_h = int(w * ratio), int(h * ratio)
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                        
+                                        # Test compressed size
+                                        img_byte_arr = io.BytesIO()
+                                        pil_img.save(img_byte_arr, format='JPEG', quality=img_quality)
+                                        new_data = img_byte_arr.getvalue()
+                                        
+                                        if len(new_data) < orig_len:
+                                            img_obj.replace(pil_img, quality=img_quality)
+                                            img_compressed = True
+                                    except Exception:
+                                        pass
+                            
+                            if img_compressed:
+                                with open(temp_out, "wb") as f:
+                                    writer.write(f)
+                                if os.path.exists(temp_out) and os.path.getsize(temp_out) < orig_size:
+                                    success = True
+                                elif os.path.exists(temp_out):
+                                    os.remove(temp_out)
+                        except Exception as e:
+                            print(f"pypdf fallback failed: {e}")
+                            if os.path.exists(temp_out):
+                                os.remove(temp_out)
                 else:
                     img = Image.open(path)
                     img = ImageOps.exif_transpose(img)
@@ -485,19 +545,33 @@ class OptiFileApp:
                         success = True
                         
                 if success:
-                    results.append({
-                        "name": name,
-                        "original": path,
-                        "temp_out": temp_out,
-                        "final_out": path,
-                        "orig_size": orig_size,
-                        "new_size": os.path.getsize(temp_out)
-                    })
+                    new_size = os.path.getsize(temp_out)
+                    if new_size >= orig_size:
+                        if os.path.exists(temp_out):
+                            os.remove(temp_out)
+                        skipped_optimized += 1
+                    else:
+                        results.append({
+                            "name": name,
+                            "original": path,
+                            "temp_out": temp_out,
+                            "final_out": path,
+                            "orig_size": orig_size,
+                            "new_size": new_size
+                        })
+                else:
+                    skipped_optimized += 1
             except Exception as e:
                 print(f"Error compressing: {e}")
+                failed_count += 1
                 
         if not results:
-            self.run_applescript_dialog("Compression failed or no files were compressed.", buttons=["OK"], icon="stop")
+            if skipped_optimized > 0 and failed_count == 0:
+                self.run_applescript_dialog("All selected files are already fully optimized!", buttons=["OK"], icon="note")
+            elif skipped_optimized > 0 and failed_count > 0:
+                self.run_applescript_dialog("Some files were already optimized, and others failed to compress.", buttons=["OK"], icon="warning")
+            else:
+                self.run_applescript_dialog("Compression failed. Please ensure Ghostscript is installed and files are valid.", buttons=["OK"], icon="stop")
             self.root.destroy()
             return
             
@@ -579,9 +653,8 @@ class OptiFileApp:
                 width, height = most_common
                 label = f"{width}x{height} pt"
                 
-                dir_name = os.path.dirname(path)
                 base = os.path.splitext(name)[0]
-                temp_out = os.path.join(dir_name, f"{base}_temp_uniform.pdf")
+                temp_out = os.path.join(tempfile.gettempdir(), f"{base}_temp_uniform.pdf")
                 
                 if self.gs_bin:
                     cmd = [
@@ -1568,17 +1641,17 @@ class OptiFileApp:
                 gs_resol = "300"
                 gs_qfactor = "0.3"
                 img_max_dim = 1920
-                img_quality = 85
+                img_quality = 88
             elif preset == "Low":
                 gs_resol = "72"
                 gs_qfactor = "1.1"
                 img_max_dim = 800
-                img_quality = 50
+                img_quality = 45
             else: # Balanced
                 gs_resol = "150"
                 gs_qfactor = "0.7"
                 img_max_dim = 1280
-                img_quality = 70
+                img_quality = 78
                 
             for idx, file_info in enumerate(self.selected_files):
                 self.update_progress(idx, total, f"Compressing {file_info['name']}...")
@@ -1594,7 +1667,7 @@ class OptiFileApp:
                 
                 if file_info["type"] == "pdf":
                     # Ghostscript compression
-                    temp_out = os.path.join(dir_name, f"{base}_temp_compressed.pdf")
+                    temp_out = os.path.join(tempfile.gettempdir(), f"{base}_temp_compressed.pdf")
                     final_replace = path
                     
                     cmd = [
@@ -1604,7 +1677,6 @@ class OptiFileApp:
                         "-dNOPAUSE", "-dQUIET", "-dBATCH",
                         "-dDownsampleColorImages=true",
                         f"-dColorImageResolution={gs_resol}",
-                        "-dDownsampleColorImages=true",
                         "-dColorImageDownsampleThreshold=1.0",
                         "-dColorImageDownsampleType=/Bicubic",
                         "-dAutoFilterColorImages=false",
@@ -1614,15 +1686,64 @@ class OptiFileApp:
                         "-f", path
                     ]
                     
-                    # If GS is not installed, fallback or fail
+                    gs_worked = False
                     if self.gs_bin:
                         proc = subprocess.run(cmd, capture_output=True)
-                        success = (proc.returncode == 0 and os.path.exists(temp_out))
-                    else:
-                        success = False
+                        if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+                            if os.path.getsize(temp_out) < orig_size:
+                                gs_worked = True
+                                success = True
+                            else:
+                                os.remove(temp_out)
+                                
+                    if not gs_worked and pypdf is not None:
+                        try:
+                            reader = pypdf.PdfReader(path)
+                            writer = pypdf.PdfWriter()
+                            for page in reader.pages:
+                                writer.add_page(page)
+                            
+                            img_compressed = False
+                            for page in writer.pages:
+                                for img_obj in page.images:
+                                    try:
+                                        orig_data = img_obj.data
+                                        orig_len = len(orig_data)
+                                        
+                                        pil_img = img_obj.image
+                                        w, h = pil_img.size
+                                        
+                                        # Only resize if image is large enough
+                                        if w > img_max_dim or h > img_max_dim:
+                                            ratio = min(img_max_dim / w, img_max_dim / h)
+                                            new_w, new_h = int(w * ratio), int(h * ratio)
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                        
+                                        # Test compressed size
+                                        img_byte_arr = io.BytesIO()
+                                        pil_img.save(img_byte_arr, format='JPEG', quality=img_quality)
+                                        new_data = img_byte_arr.getvalue()
+                                        
+                                        if len(new_data) < orig_len:
+                                            img_obj.replace(pil_img, quality=img_quality)
+                                            img_compressed = True
+                                    except Exception:
+                                        pass
+                            
+                            if img_compressed:
+                                with open(temp_out, "wb") as f:
+                                    writer.write(f)
+                                if os.path.exists(temp_out) and os.path.getsize(temp_out) < orig_size:
+                                    success = True
+                                elif os.path.exists(temp_out):
+                                    os.remove(temp_out)
+                        except Exception as e:
+                            print(f"GUI pypdf fallback failed: {e}")
+                            if os.path.exists(temp_out):
+                                os.remove(temp_out)
                         
                 else: # Images (JPG, PNG, HEIC, TIFF, BMP)
-                    temp_out = os.path.join(dir_name, f"{base}_temp_compressed{ext_lowercase}")
+                    temp_out = os.path.join(tempfile.gettempdir(), f"{base}_temp_compressed{ext_lowercase}")
                     final_replace = path
                     
                     # Handle HEIC natively on macOS via sips
@@ -1682,7 +1803,8 @@ class OptiFileApp:
                     new_size = os.path.getsize(temp_out)
                     # If compression actually expanded the size, we discard it to prevent bloat
                     if new_size >= orig_size:
-                        os.remove(temp_out)
+                        if os.path.exists(temp_out):
+                            os.remove(temp_out)
                         print(f"Skipping {name}: Original ({orig_size}) was smaller than compressed ({new_size})")
                     else:
                         results.append({
@@ -1893,7 +2015,6 @@ class OptiFileApp:
             except Exception as e:
                 print(f"Error replacing original file: {e}")
                 
-        messagebox.showinfo("Success", "All original files replaced successfully!")
         self.close_results_panel()
 
     def keep_copies(self, results):
@@ -1901,19 +2022,26 @@ class OptiFileApp:
         for item in results:
             try:
                 temp = item["temp_out"]
-                # Give it a cleaner name (strip '_temp_compressed' to just '_compressed' / '_uniform')
-                clean_path = temp.replace("_temp_compressed", "_compressed")
-                if temp != clean_path:
-                    if os.path.exists(clean_path):
-                        os.remove(clean_path)
-                    os.rename(temp, clean_path)
+                orig = item["original"]
+                dir_name = os.path.dirname(orig)
+                base, ext = os.path.splitext(os.path.basename(orig))
+                
+                # Check for temp naming pattern
+                if "_temp_uniform" in temp:
+                    clean_path = os.path.join(dir_name, f"{base}_uniform{ext}")
+                else:
+                    clean_path = os.path.join(dir_name, f"{base}_compressed{ext}")
+                    
+                if os.path.exists(clean_path):
+                    os.remove(clean_path)
+                shutil.move(temp, clean_path)
             except Exception as e:
                 print(f"Error keeping copies: {e}")
                 
         # Open parent folder of first copy
         if results:
-            first_out = results[0]["temp_out"].replace("_temp_compressed", "_compressed")
-            self.open_path_in_file_manager(os.path.dirname(first_out))
+            orig = results[0]["original"]
+            self.open_path_in_file_manager(os.path.dirname(orig))
             
         self.close_results_panel()
 
