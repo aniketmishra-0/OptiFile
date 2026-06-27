@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -760,8 +760,10 @@ class OptiFileApp:
                     temp_files.append((temp_path, ext))
                 except Exception:
                     pass
+            pad_width = len(str(len(temp_files)))
             for idx, (temp_path, ext) in enumerate(temp_files):
-                final_path = os.path.join(dir_path, f"({idx + 1}){ext}")
+                num_str = str(idx + 1).zfill(pad_width)
+                final_path = os.path.join(dir_path, f"({num_str}){ext}")
                 try:
                     if os.path.exists(final_path):
                         os.remove(final_path)
@@ -1448,8 +1450,10 @@ class OptiFileApp:
                         temp_names.append((temp_path, ext))
                     
                     # 2nd pass: rename to final sequential names
+                    pad_width = len(str(len(temp_names)))
                     for idx, (temp_path, ext) in enumerate(temp_names):
-                        final_path = os.path.join(directory, f"({idx+1}){ext}")
+                        num_str = str(idx + 1).zfill(pad_width)
+                        final_path = os.path.join(directory, f"({num_str}){ext}")
                         os.rename(temp_path, final_path)
                         new_files.append(final_path)
                         
@@ -1482,6 +1486,12 @@ class OptiFileApp:
                 })
         self.update_file_list_ui()
         
+        # Refresh Finder
+        if new_paths:
+            folders = set(os.path.dirname(p) for p in new_paths)
+            for folder in folders:
+                self.refresh_macos_finder(folder)
+                
         # Show elegant toast notification
         self.show_completion_panel(mode="rename", file_count=len(new_paths))
 
