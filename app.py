@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -115,10 +115,10 @@ class OptiFileApp:
             if f not in self.pending_files:
                 self.pending_files.append(f)
         
-        # Reset the debounce timer (120ms of inactivity required to process)
+        # Reset the debounce timer (50ms of inactivity required to process)
         if self.process_files_timer:
             self.root.after_cancel(self.process_files_timer)
-        self.process_files_timer = self.root.after(120, self.process_queued_files)
+        self.process_files_timer = self.root.after(50, self.process_queued_files)
         
     def process_queued_files(self):
         self.process_files_timer = None
@@ -430,18 +430,18 @@ class OptiFileApp:
         if preset == "High":
             gs_resol = "300"
             gs_qfactor = "0.3"
-            img_max_dim = 1920
-            img_quality = 88
+            img_max_dim = 1600
+            img_quality = 85
         elif preset == "Low":
             gs_resol = "72"
             gs_qfactor = "1.1"
-            img_max_dim = 800
-            img_quality = 45
+            img_max_dim = 720
+            img_quality = 40
         else:  # Balanced (Recommended)
             gs_resol = "150"
             gs_qfactor = "0.7"
-            img_max_dim = 1280
-            img_quality = 78
+            img_max_dim = 1024
+            img_quality = 70
             
         results = []
         skipped_optimized = 0
@@ -459,9 +459,21 @@ class OptiFileApp:
                 
                 success = False
                 if file_info["type"] == "pdf":
-                    # Method 1: Try Ghostscript
+                    # Scan PDF to see if it is image-heavy
+                    is_image_heavy = False
+                    if pypdf is not None:
+                        try:
+                            reader = pypdf.PdfReader(path)
+                            total_pages = len(reader.pages)
+                            has_images = sum(1 for p in reader.pages if len(p.images) > 0)
+                            if total_pages > 0 and (has_images / total_pages) >= 0.7:
+                                is_image_heavy = True
+                        except Exception:
+                            pass
+                            
+                    # Method 1: Try Ghostscript (only if not image-heavy)
                     gs_worked = False
-                    if self.gs_bin:
+                    if self.gs_bin and not is_image_heavy:
                         cmd = [
                             self.gs_bin, "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
                             "-dNOPAUSE", "-dQUIET", "-dBATCH",
@@ -480,7 +492,7 @@ class OptiFileApp:
                             else:
                                 os.remove(temp_out)
                                 
-                    # Method 2: If Ghostscript failed or bloated, try pypdf+Pillow image resizing
+                    # Method 2: If Ghostscript failed, bloated, or skipped (image-heavy), try pypdf+Pillow image resizing
                     if not gs_worked and pypdf is not None:
                         try:
                             reader = pypdf.PdfReader(path)
@@ -502,7 +514,7 @@ class OptiFileApp:
                                         if w > img_max_dim or h > img_max_dim:
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
-                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
                                         
                                         # Test compressed size
                                         img_byte_arr = io.BytesIO()
@@ -1640,18 +1652,18 @@ class OptiFileApp:
             if preset == "High":
                 gs_resol = "300"
                 gs_qfactor = "0.3"
-                img_max_dim = 1920
-                img_quality = 88
+                img_max_dim = 1600
+                img_quality = 85
             elif preset == "Low":
                 gs_resol = "72"
                 gs_qfactor = "1.1"
-                img_max_dim = 800
-                img_quality = 45
+                img_max_dim = 720
+                img_quality = 40
             else: # Balanced
                 gs_resol = "150"
                 gs_qfactor = "0.7"
-                img_max_dim = 1280
-                img_quality = 78
+                img_max_dim = 1024
+                img_quality = 70
                 
             for idx, file_info in enumerate(self.selected_files):
                 self.update_progress(idx, total, f"Compressing {file_info['name']}...")
@@ -1666,7 +1678,19 @@ class OptiFileApp:
                 success = False
                 
                 if file_info["type"] == "pdf":
-                    # Ghostscript compression
+                    # Scan PDF to see if it is image-heavy
+                    is_image_heavy = False
+                    if pypdf is not None:
+                        try:
+                            reader = pypdf.PdfReader(path)
+                            total_pages = len(reader.pages)
+                            has_images = sum(1 for p in reader.pages if len(p.images) > 0)
+                            if total_pages > 0 and (has_images / total_pages) >= 0.7:
+                                is_image_heavy = True
+                        except Exception:
+                            pass
+                            
+                    # Ghostscript compression (only if not image-heavy)
                     temp_out = os.path.join(tempfile.gettempdir(), f"{base}_temp_compressed.pdf")
                     final_replace = path
                     
@@ -1687,7 +1711,7 @@ class OptiFileApp:
                     ]
                     
                     gs_worked = False
-                    if self.gs_bin:
+                    if self.gs_bin and not is_image_heavy:
                         proc = subprocess.run(cmd, capture_output=True)
                         if proc.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
                             if os.path.getsize(temp_out) < orig_size:
@@ -1717,7 +1741,7 @@ class OptiFileApp:
                                         if w > img_max_dim or h > img_max_dim:
                                             ratio = min(img_max_dim / w, img_max_dim / h)
                                             new_w, new_h = int(w * ratio), int(h * ratio)
-                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                                            pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
                                         
                                         # Test compressed size
                                         img_byte_arr = io.BytesIO()
