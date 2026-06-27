@@ -72,7 +72,7 @@ class ScrollableFrame(tk.Frame):
             self.canvas.yview_scroll(-1 * int(event.delta / 120), "units")
 
 # App Version
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 
 class OptiFileApp:
     def __init__(self, root):
@@ -630,6 +630,10 @@ class OptiFileApp:
             base_name = os.path.splitext(name)[0]
             
             out_dir = os.path.join(dir_name, f"{base_name}_images")
+            counter = 1
+            while os.path.exists(out_dir):
+                out_dir = os.path.join(dir_name, f"{base_name}_images_{counter}")
+                counter += 1
             os.makedirs(out_dir, exist_ok=True)
             out_dirs.append(out_dir)
             
@@ -1538,6 +1542,10 @@ class OptiFileApp:
                 base_name = os.path.splitext(file_info["name"])[0]
                 
                 out_dir = os.path.join(dir_name, f"{base_name}_images")
+                counter = 1
+                while os.path.exists(out_dir):
+                    out_dir = os.path.join(dir_name, f"{base_name}_images_{counter}")
+                    counter += 1
                 os.makedirs(out_dir, exist_ok=True)
                 output_directories.append(out_dir)
                 
